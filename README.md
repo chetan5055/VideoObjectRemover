@@ -32,7 +32,7 @@ Our SoraWm is purely deeplearning driven and yields good results in many generat
 
 ## 2. Installation
 
-We highly recommend using the `uv` to install the environments:
+[FFmpeg](https://ffmpeg.org/) is needed for video processing, please install it first.  We highly recommend using the `uv` to install the environments:
 
 1. installation:
 
