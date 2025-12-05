@@ -234,3 +234,8 @@ resources/checkpoint
 
 
 frontend/node_modules
+
+*.nsys-rep
+*.qdstrm
+# profile/profile_e2fgvi_hq.nsys-rep
+*.npy

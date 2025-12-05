@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import ConvModule
 from mmcv.runner import load_checkpoint
+from sorawm.configs import PHY_NET_CHECKPOINT_PATH, PHY_NET_CHECKPOINT_REMOTE_URL
+from sorawm.utils.download_utils import ensure_model_downloaded
 
 
 class FlowCompletionLoss(nn.Module):
@@ -69,13 +71,9 @@ class SPyNet(nn.Module):
         self.basic_module = nn.ModuleList([SPyNetBasicModule() for _ in range(6)])
 
         if use_pretrain:
-            if isinstance(pretrained, str):
-                print("load pretrained SPyNet...")
-                load_checkpoint(self, pretrained, strict=True)
-            elif pretrained is not None:
-                raise TypeError(
-                    f"[pretrained] should be str or None, but got {type(pretrained)}."
-                )
+            ensure_model_downloaded(PHY_NET_CHECKPOINT_PATH, PHY_NET_CHECKPOINT_REMOTE_URL)
+            print("load pretrained SPyNet...")
+            load_checkpoint(self, str(PHY_NET_CHECKPOINT_PATH), strict=True)
 
         self.register_buffer(
             "mean", torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
