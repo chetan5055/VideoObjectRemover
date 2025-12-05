@@ -228,7 +228,13 @@ class SoraWM:
             all_cleaned_frames = None
             # Create overlapping segments for smooth transitions
             num_segments = len(bkps_full) - 1
-            for segment_idx in range(num_segments):
+            for segment_idx in tqdm(
+                range(num_segments),
+                desc="Segment",
+                position=0,
+                leave=True,
+                disable=quiet,
+            ):
                 seg_start = bkps_full[segment_idx]
                 seg_end = bkps_full[segment_idx + 1]
                 seg_length = seg_end - seg_start

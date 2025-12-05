@@ -101,8 +101,8 @@ class E2FGVIHDCleaner:
 
         for f in tqdm(
             range(0, chunk_length, neighbor_stride),
-            desc=f"  Frame progress",
-            position=1,
+            desc=f"    Frame progress",
+            position=2,
             leave=False,
         ):
             neighbor_ids = [
@@ -171,7 +171,9 @@ class E2FGVIHDCleaner:
             f"Processing {video_length} frames in {num_chunks} chunks (chunk_size={chunk_size}, overlap={overlap_size})"
         )
 
-        for chunk_idx in tqdm(range(num_chunks), desc="Chunk", position=0, leave=True):
+        for chunk_idx in tqdm(
+            range(num_chunks), desc="  Chunk", position=1, leave=False
+        ):
             start_idx = chunk_idx * (chunk_size - overlap_size)
             end_idx = min(start_idx + chunk_size, video_length)
             actual_chunk_size = end_idx - start_idx
