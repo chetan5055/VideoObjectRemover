@@ -142,11 +142,11 @@ if __name__ == "__main__":
     
     # 1. LAMA is fast and good quality, but not time consistent.
     sora_wm = SoraWM(cleaner_type=CleanerType.LAMA)
-    sora_wm.run(input_video_path, f"{output_video_path}_lama.mp4")
+    sora_wm.run(input_video_path, Path(f"{output_video_path}_lama.mp4"))
     
     # 2. E2FGVI_HQ ensures time consistency, but will be very slow on no-cuda device.
     sora_wm = SoraWM(cleaner_type=CleanerType.E2FGVI_HQ)
-    sora_wm.run(input_video_path, f"{output_video_path}_e2fgvi_hq.mp4")
+    sora_wm.run(input_video_path, Path(f"{output_video_path}_e2fgvi_hq.mp4"))
 
 ```
 
