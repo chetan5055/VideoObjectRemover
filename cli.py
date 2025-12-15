@@ -6,7 +6,17 @@ from typing import Dict, List
 
 
 def validate_args_and_show_help():
-    """Parse and validate arguments before loading heavy dependencies"""
+    """
+    Parse CLI arguments, validate the input folder, and return resolved paths and parsed args.
+    
+    Parses command-line options for input, output, pattern, quiet, and model; converts input and output to resolved Path objects and validates that the input path exists and is a directory. Exits the process with code 1 if the input path is missing or not a directory.
+    
+    Returns:
+        (input_folder, output_folder, args): 
+            input_folder (Path): Resolved Path to the input directory.
+            output_folder (Path): Resolved Path to the output directory.
+            args (argparse.Namespace): Parsed command-line arguments.
+    """
     parser = argparse.ArgumentParser(
         description="🎬 Batch process videos to remove Sora watermarks",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -86,6 +96,11 @@ Examples:
 
 def main():
     # Validate arguments BEFORE loading heavy dependencies (ffmpeg, torch, etc.)
+    """
+    Orchestrate CLI argument validation, lazy-load heavy dependencies, and run the batch video processing workflow.
+    
+    Validates and processes command-line arguments, imports runtime-only dependencies, selects the watermark removal model, constructs and runs the batch processor, and handles termination: exits with code 130 on user interrupt and with code 1 on other fatal errors.
+    """
     input_folder, output_folder, args = validate_args_and_show_help()
 
     pattern = args.pattern
@@ -141,6 +156,15 @@ def main():
         def __init__(
             self, input_folder: Path, output_folder: Path, pattern: str = "*.mp4", cleaner_type: CleanerType = CleanerType.LAMA
         ):
+            """
+            Initialize the batch processor with paths, file-matching pattern, and watermark cleaner selection.
+            
+            Parameters:
+                input_folder (Path): Directory containing videos to process.
+                output_folder (Path): Directory where cleaned videos will be written.
+                pattern (str): Glob pattern used to find video files in the input folder (default: "*.mp4").
+                cleaner_type (CleanerType): Cleaner model to use for watermark removal (e.g., CleanerType.LAMA or CleanerType.E2FGVI_HQ).
+            """
             self.input_folder = input_folder
             self.output_folder = output_folder
             self.pattern = pattern
