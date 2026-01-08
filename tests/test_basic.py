@@ -26,7 +26,7 @@ def test_schemas_import():
 def test_watermark_cleaner_factory():
     """Test watermark cleaner factory with mocking."""
     try:
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         with (
             patch("sorawm.watermark_cleaner.LamaCleaner") as mock_lama,
@@ -59,10 +59,10 @@ def test_imputation_utils():
     """Test imputation utilities with mock data."""
     try:
         # Test with minimal data that doesn't require ruptures
-        import numpy as np
-
         # Mock the imputation functions to avoid ruptures dependency
         from unittest.mock import patch
+
+        import numpy as np
 
         with patch("sorawm.utils.imputation_utils.rpt") as mock_rpt:
             # Mock the CPD result
@@ -97,8 +97,9 @@ def test_imputation_utils():
 def test_video_utils():
     """Test video utilities."""
     try:
-        from sorawm.utils.video_utils import merge_frames_with_overlap
         import numpy as np
+
+        from sorawm.utils.video_utils import merge_frames_with_overlap
 
         # Test basic merging
         frame1 = np.ones((10, 10, 3), dtype=np.uint8) * 100

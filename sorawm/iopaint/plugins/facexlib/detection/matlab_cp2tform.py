@@ -1,7 +1,6 @@
 import numpy as np
-from numpy.linalg import inv, lstsq
+from numpy.linalg import inv, lstsq, norm
 from numpy.linalg import matrix_rank as rank
-from numpy.linalg import norm
 
 
 class MatlabCp2tormException(Exception):

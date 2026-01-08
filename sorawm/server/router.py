@@ -5,8 +5,8 @@ import aiofiles
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
-from sorawm.server.schemas import QueueStatusResponse, WMRemoveResults
 from sorawm.schemas import CleanerType
+from sorawm.server.schemas import QueueStatusResponse, WMRemoveResults
 from sorawm.server.worker import worker
 
 router = APIRouter()

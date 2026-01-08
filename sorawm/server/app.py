@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 
+from sorawm.server.front_router import router as front_router
 from sorawm.server.lifespan import lifespan
 from sorawm.server.router import router as backend_router
-from sorawm.server.front_router import router as front_router
 
 
 def init_app():

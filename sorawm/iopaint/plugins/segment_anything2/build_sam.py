@@ -14,8 +14,8 @@ from .modeling.backbones.image_encoder import FpnNeck, ImageEncoder
 from .modeling.memory_attention import MemoryAttention, MemoryAttentionLayer
 from .modeling.memory_encoder import CXBlock, Fuser, MaskDownSampler, MemoryEncoder
 from .modeling.position_encoding import PositionEmbeddingSine
-from .modeling.sam2_base import SAM2Base
 from .modeling.sam.transformer import RoPEAttention
+from .modeling.sam2_base import SAM2Base
 
 common_kwargs = dict(
     num_maskmem=7,

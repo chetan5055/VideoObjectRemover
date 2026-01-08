@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from sorawm.schemas import CleanerType
 from sorawm.watermark_cleaner import WaterMarkCleaner

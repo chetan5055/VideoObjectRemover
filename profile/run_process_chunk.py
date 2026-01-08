@@ -1,17 +1,17 @@
-import numpy as np
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
 from typing import List
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+from loguru import logger
 from torch.cuda.nvtx import range_pop, range_push
 from tqdm import tqdm
-from loguru import logger
 
 from sorawm.cleaner.e2fgvi_hq_cleaner import *
-from sorawm.utils.video_utils import merge_frames_with_overlap
 from sorawm.models.model.e2fgvi_hq import InpaintGenerator
+from sorawm.utils.video_utils import merge_frames_with_overlap
 
 
 @contextmanager

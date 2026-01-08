@@ -3,8 +3,8 @@ import pytest
 
 from sorawm.utils.imputation_utils import (
     find_2d_data_bkps,
-    get_interval_average_bbox,
     find_idxs_interval,
+    get_interval_average_bbox,
     refine_bkps_by_chunk_size,
 )
 

@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import ConvModule
 from mmcv.runner import load_checkpoint
+
 from sorawm.configs import PHY_NET_CHECKPOINT_PATH, PHY_NET_CHECKPOINT_REMOTE_URL
 from sorawm.utils.download_utils import ensure_model_downloaded
 

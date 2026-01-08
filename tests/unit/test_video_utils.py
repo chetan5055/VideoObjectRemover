@@ -1,7 +1,8 @@
+from pathlib import Path
+from unittest.mock import MagicMock, mock_open, patch
+
 import numpy as np
 import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch, mock_open
 
 from sorawm.utils.video_utils import VideoLoader, merge_frames_with_overlap
 

@@ -10,16 +10,16 @@ from tqdm import tqdm
 from sorawm.configs import (
     E2FGVI_HQ_CHECKPOINT_PATH,
     E2FGVI_HQ_CHECKPOINT_REMOTE_URL,
-    ENABLE_E2FGVI_HQ_TORCH_COMPILE,
     E2FGVI_HQ_TORCH_COMPILE_ARTIFACTS,
     E2FGVI_HQ_TORCH_COMPILE_ARTIFACTS_BF16,
+    ENABLE_E2FGVI_HQ_TORCH_COMPILE,
 )
+from sorawm.constants import CHUNK_SIZE_PER_GB_VRAM
 from sorawm.models.model.e2fgvi_hq import InpaintGenerator
 from sorawm.utils.devices_utils import get_device
 from sorawm.utils.download_utils import ensure_model_downloaded
-from sorawm.utils.video_utils import merge_frames_with_overlap
 from sorawm.utils.mem_utils import memory_profiling
-from sorawm.constants import CHUNK_SIZE_PER_GB_VRAM
+from sorawm.utils.video_utils import merge_frames_with_overlap
 
 
 def get_ref_index(
@@ -134,7 +134,11 @@ class E2FGVIHDCleaner:
         if self.config.enable_torch_compile:
             try:
                 # Use different cache files for bf16 and fp32 modes
-                self.artifacts_path = E2FGVI_HQ_TORCH_COMPILE_ARTIFACTS_BF16 if self.use_bf16 else E2FGVI_HQ_TORCH_COMPILE_ARTIFACTS
+                self.artifacts_path = (
+                    E2FGVI_HQ_TORCH_COMPILE_ARTIFACTS_BF16
+                    if self.use_bf16
+                    else E2FGVI_HQ_TORCH_COMPILE_ARTIFACTS
+                )
 
                 if self.artifacts_path.exists():
                     logger.info(
@@ -143,7 +147,7 @@ class E2FGVIHDCleaner:
                     artifact_bytes = self.artifacts_path.read_bytes()
                     torch.compiler.load_cache_artifacts(artifact_bytes)
                     # Use default mode for better stability with bf16
-                    compile_mode = "default" #if self.use_bf16 else "max-autotune"
+                    compile_mode = "default"  # if self.use_bf16 else "max-autotune"
                     self.model = torch.compile(self.model, mode=compile_mode)
                     self._artifacts_saved = True  # Already have cached artifacts
 
@@ -152,7 +156,7 @@ class E2FGVIHDCleaner:
                         f"Compiling model on first inference. Artifacts will be saved to {self.artifacts_path}"
                     )
                     # Use default mode for bf16 to avoid compilation issues
-                    compile_mode = "default" #if self.use_bf16 else "max-autotune"
+                    compile_mode = "default"  # if self.use_bf16 else "max-autotune"
                     logger.info(f"Using torch.compile mode: {compile_mode}")
                     self.model = torch.compile(self.model, mode=compile_mode)
                     # Will save artifacts after first inference
@@ -356,7 +360,9 @@ class E2FGVIHDCleaner:
                 if artifacts is not None:
                     artifact_bytes, _ = artifacts
                     self.artifacts_path.write_bytes(artifact_bytes)
-                    logger.info(f"Saved torch compile artifacts to {self.artifacts_path}")
+                    logger.info(
+                        f"Saved torch compile artifacts to {self.artifacts_path}"
+                    )
                     self._artifacts_saved = True
             except Exception as e:
                 logger.warning(f"Failed to save torch compile artifacts: {e}")

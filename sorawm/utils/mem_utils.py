@@ -7,15 +7,12 @@ import gc
 # from collections.abc import Generator
 from dataclasses import dataclass, field
 from functools import cache
-from .mem_constants import GiB_bytes
 
 # import psutil
 import torch
+
 # import torch.types
-
 from .mem_constants import GiB_bytes
-
-from dataclasses import dataclass, field
 
 
 @dataclass

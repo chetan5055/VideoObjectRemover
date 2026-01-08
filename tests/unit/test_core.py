@@ -1,7 +1,8 @@
+from pathlib import Path
+from unittest.mock import MagicMock, call, patch
+
 import numpy as np
 import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
 
 from sorawm.core import SoraWM
 from sorawm.schemas import CleanerType

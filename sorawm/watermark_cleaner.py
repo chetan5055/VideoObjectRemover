@@ -10,7 +10,12 @@ from sorawm.schemas import CleanerType
 
 
 class WaterMarkCleaner:
-    def __new__(cls, cleaner_type: CleanerType, enable_torch_compile: bool, use_bf16: bool = False):
+    def __new__(
+        cls,
+        cleaner_type: CleanerType,
+        enable_torch_compile: bool,
+        use_bf16: bool = False,
+    ):
         """
         Create and return an instance of the specified cleaner implementation.
 
@@ -28,7 +33,9 @@ class WaterMarkCleaner:
         if cleaner_type == CleanerType.LAMA:
             return LamaCleaner()
         elif cleaner_type == CleanerType.E2FGVI_HQ:
-            e2fgvi_hq_config = E2FGVIHDConfig(enable_torch_compile=enable_torch_compile, use_bf16=use_bf16)
+            e2fgvi_hq_config = E2FGVIHDConfig(
+                enable_torch_compile=enable_torch_compile, use_bf16=use_bf16
+            )
             return E2FGVIHDCleaner(config=e2fgvi_hq_config)
         else:
             raise ValueError(f"Invalid cleaner type: {cleaner_type}")

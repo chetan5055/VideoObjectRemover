@@ -8,16 +8,16 @@ from loguru import logger
 from sqlalchemy import select
 
 from sorawm.configs import WORKING_DIR
-from sorawm.schemas import CleanerType
 from sorawm.core import SoraWM
+from sorawm.schemas import CleanerType
 from sorawm.server.db import get_session
 from sorawm.server.models import Task
 from sorawm.server.schemas import (
+    QueueStatusResponse,
+    QueueSummary,
+    QueueTaskInfo,
     Status,
     WMRemoveResults,
-    QueueStatusResponse,
-    QueueTaskInfo,
-    QueueSummary,
 )
 
 

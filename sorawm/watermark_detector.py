@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import List
 
 import numpy as np
 from loguru import logger
@@ -8,7 +9,6 @@ from sorawm.configs import WATER_MARK_DETECT_YOLO_WEIGHTS
 from sorawm.utils.devices_utils import get_device
 from sorawm.utils.download_utils import download_detector_weights
 from sorawm.utils.video_utils import VideoLoader
-from typing import List
 
 # based on the sora tempalte to detect the whole, and then got the icon part area.
 
@@ -49,7 +49,6 @@ class SoraWaterMarkDetector:
             "center": (int(center_x), int(center_y)),
         }
 
-
     def detect(self, input_image: np.ndarray) -> dict:
         # Run YOLO inference
         results = self.model(input_image, verbose=False)
@@ -57,28 +56,31 @@ class SoraWaterMarkDetector:
         result = results[0]
         return self._parse_detect_results(result)
 
-    def detect_batch(self, input_images: List[np.ndarray], batch_size: int) -> List[dict]:
+    def detect_batch(
+        self, input_images: List[np.ndarray], batch_size: int
+    ) -> List[dict]:
         if not input_images:
             return []
-        
+
         all_results = []
-        
+
         # Process images in batches
         for i in range(0, len(input_images), batch_size):
-            batch_images = input_images[i:i + batch_size]
-            
+            batch_images = input_images[i : i + batch_size]
+
             # YOLO automatically handles image lists and will batch process them
             # if all images have the same size (which is typical for video frames).
             # The model internally concatenates images into a batch tensor for
             # parallel GPU processing, which is much faster than processing individually.
             batch_results = self.model(batch_images, verbose=False)
-            
+
             # Parse each result in the batch
             for result in batch_results:
                 parsed_result = self._parse_detect_results(result)
                 all_results.append(parsed_result)
-        
+
         return all_results
+
 
 if __name__ == "__main__":
     from pathlib import Path
