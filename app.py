@@ -85,36 +85,64 @@ def main():
     st.markdown("---")
 
     # Model selection
-    st.markdown("### ⚙️ Model Settings")
+    # Model selection
+st.markdown("### ⚙️ Model Settings")
 
-    col1, col2 = st.columns([2, 3])
-    with col1:
-        model_type = st.selectbox(
-            "Select Cleaner Model:",
-            options=[CleanerType.LAMA, CleanerType.E2FGVI_HQ],
-            format_func=lambda x: {
-                CleanerType.LAMA: "🚀 LAMA (Fast, Good Quality)",
-                CleanerType.E2FGVI_HQ: "💎 E2FGVI-HQ (Slower when not on GPU, Best Quality with time consistency)",
-            }[x],
-            help="LAMA: Fast processing with good quality. E2FGVI-HQ: Slower when not on GPU but highest quality results.",
-        )
+col1, col2 = st.columns([2, 3])
 
-    with col2:
-        model_info = {
-            CleanerType.LAMA: "⚡ **Fast processing** - Recommended for most videos. Uses LaMa (Large Mask Inpainting) for quick watermark removal.",
-            CleanerType.E2FGVI_HQ: "🎯 **Highest quality** - Uses temporal flow-based video inpainting. Best for professional results. Slower when not on GPU. Time consistency is guaranteed.",
-        }
-        st.info(model_info[model_type])
+# Friendly labels for dropdown
+MODEL_LABELS = {
+    CleanerType.LAMA: "🚀 LAMA (Fast, Good Quality)",
+    CleanerType.E2FGVI_HQ: "💎 E2FGVI-HQ (Best Quality, Temporal Consistency)",
+    CleanerType.PROPAINTER: "🧠 ProPainter (Best Quality, Slowest)",
+}
 
-    # Initialize or reinitialize SoraWM if model changed
-    if (
-        "sora_wm" not in st.session_state
-        or st.session_state.get("current_model") != model_type
-    ):
-        with st.spinner(f"Loading {model_type.value.upper()} model..."):
-            st.session_state.sora_wm = SoraWM(cleaner_type=model_type)
-            st.session_state.current_model = model_type
-        st.success(f"✅ {model_type.value.upper()} model loaded!")
+# Right-side info panel text
+MODEL_INFO = {
+    CleanerType.LAMA: (
+        "⚡ **Fast processing** — Recommended for most videos.\n\n"
+        "Uses **LaMa (Large Mask Inpainting)** for quick watermark removal."
+    ),
+    CleanerType.E2FGVI_HQ: (
+        "🎯 **Highest quality** — Temporal flow-based video inpainting.\n\n"
+        "Best for professional results. **Slow on CPU**, good on GPU.\n\n"
+        "**Time consistency is guaranteed.**"
+    ),
+    CleanerType.PROPAINTER: (
+        "🧩 **Best quality (when masks are good)** — Strong temporal consistency.\n\n"
+        "Slower, but usually cleaner output on complex motion.\n\n"
+        "⚠️ Requires ProPainter integration + weights."
+    ),
+}
+
+with col1:
+    # Build options dynamically but only include types that exist in CleanerType
+    # (prevents crash if PROPAINTER enum isn't added yet)
+    options = [CleanerType.LAMA, CleanerType.E2FGVI_HQ]
+    if hasattr(CleanerType, "PROPAINTER"):
+        options.append(CleanerType.PROPAINTER)
+
+    model_type = st.selectbox(
+        "Select Cleaner Model:",
+        options=options,
+        format_func=lambda x: MODEL_LABELS.get(x, str(x)),
+        help=(
+            "LAMA: Fast processing with good quality.\n"
+            "E2FGVI-HQ: Best quality with temporal consistency.\n"
+            "ProPainter: Best quality (slowest) if installed + weights configured."
+        ),
+    )
+
+with col2:
+    st.info(MODEL_INFO.get(model_type, "Model information not available."))
+
+# Initialize or reinitialize SoraWM if model changed
+if ("sora_wm" not in st.session_state) or (st.session_state.get("current_model") != model_type):
+    with st.spinner(f"Loading {model_type.value.upper()} model..."):
+        st.session_state.sora_wm = SoraWM(cleaner_type=model_type)
+        st.session_state.current_model = model_type
+    st.success(f"✅ {model_type.value.upper()} model loaded!")
+
 
     st.markdown("---")
 
@@ -261,7 +289,7 @@ def main():
             if st.button(
                 "🚀 Process All Videos", type="primary", use_container_width=True
             ):
-                with tempfile.TemporaryDirectory() as tmp_dir:
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
                     tmp_path = Path(tmp_dir)
                     input_folder = tmp_path / "input"
                     output_folder = tmp_path / "output"
