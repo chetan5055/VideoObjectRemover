@@ -9,25 +9,31 @@ class WaterMarkCleaner:
         cleaner_type: CleanerType,
         enable_torch_compile: bool,
         use_bf16: bool = False,
+        # ✅ add these (safe defaults)
+        propainter_dir: str | None = None,
+        propainter_weights_dir: str | None = None,
+        device: str = "cuda",
+        propainter_fast_mode: bool = True,
     ):
-        """
-        Factory that returns an instance of the requested cleaner.
-        """
-
         if cleaner_type == CleanerType.LAMA:
             return LamaCleaner()
 
-        elif cleaner_type == CleanerType.E2FGVI_HQ:
+        if cleaner_type == CleanerType.E2FGVI_HQ:
             e2fgvi_hq_config = E2FGVIHDConfig(
                 enable_torch_compile=enable_torch_compile,
                 use_bf16=use_bf16,
             )
             return E2FGVIHDCleaner(config=e2fgvi_hq_config)
 
-        elif cleaner_type == CleanerType.PROPAINTER:
-            # ProPainterCleaner must exist and match the interface used by core.py
+        if cleaner_type == CleanerType.PROPAINTER:
+            if not propainter_dir:
+                raise ValueError("propainter_dir is required for PROPAINTER cleaner")
             from sorawm.cleaner.propainter_cleaner import ProPainterCleaner
-            return ProPainterCleaner()
+            return ProPainterCleaner(
+                propainter_dir=propainter_dir,
+                weights_dir=propainter_weights_dir,
+                device=device,
+                fast_mode=propainter_fast_mode,
+            )
 
-        else:
-            raise ValueError(f"Invalid cleaner type: {cleaner_type}")
+        raise ValueError(f"Invalid cleaner type: {cleaner_type}")
