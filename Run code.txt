@@ -1,0 +1,3 @@
+cd C:\Users\WIN11\Desktop\SoraWatermarkCleaner
+.\.venv\Scripts\activate
+streamlit run app.py

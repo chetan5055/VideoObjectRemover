@@ -38,8 +38,7 @@ def main():
         """
         <div style='text-align: center; padding: 1rem 0; margin-top: 0.5rem;'>
             <p style='color: #888; font-size: 0.9rem;'>
-                Built with ❤️ by Chetan using Streamlit and AI |
-                   target='_blank' style='color: #667eea; text-decoration: none;'>
+                Built with ❤️ by Chetan using Streamlit and AI
                 </a>
             </p>
         </div>
