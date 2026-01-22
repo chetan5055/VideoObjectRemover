@@ -1,10 +1,10 @@
 from pathlib import Path
 from typing import Callable
+import subprocess
 
 import numpy as np
 from loguru import logger
 from tqdm import tqdm
-
 import ffmpeg
 
 from sorawm.configs import DEFAULT_DETECT_BATCH_SIZE, ENABLE_E2FGVI_HQ_TORCH_COMPILE
@@ -21,20 +21,28 @@ from sorawm.watermark_detector import SoraWaterMarkDetector
 
 VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"]
 
-# ✅ Stronger mask expansion to actually remove watermark
 MASK_PAD_PX = 18
-DILATE_KERNEL = 15  # must be odd
+DILATE_KERNEL = 15
 DILATE_ITERS = 1
+
+_NVENC_AVAILABLE = None
+
+
+def _has_nvenc() -> bool:
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is not None:
+        return _NVENC_AVAILABLE
+    try:
+        out = subprocess.check_output(["ffmpeg", "-hide_banner", "-encoders"], stderr=subprocess.STDOUT, text=True)
+        _NVENC_AVAILABLE = ("h264_nvenc" in out)
+    except Exception:
+        _NVENC_AVAILABLE = False
+    return _NVENC_AVAILABLE
 
 
 def _make_mask_from_bbox(height: int, width: int, bbox):
-    """
-    bbox: (x1,y1,x2,y2) ints
-    returns (H,W) uint8 mask 0/255
-    """
     if bbox is None:
         return None
-
     x1, y1, x2, y2 = bbox
     x1 = int(max(0, x1 - MASK_PAD_PX))
     y1 = int(max(0, y1 - MASK_PAD_PX))
@@ -55,16 +63,12 @@ def _make_mask_from_bbox(height: int, width: int, bbox):
 
 
 def _resize_frame_rgb(frame_rgb: np.ndarray, width: int, height: int) -> np.ndarray:
-    """Ensure frame is (H,W,3) in RGB."""
     if frame_rgb.shape[0] == height and frame_rgb.shape[1] == width:
         return frame_rgb
-
     try:
         import cv2
-        resized = cv2.resize(frame_rgb, (width, height), interpolation=cv2.INTER_LINEAR)
-        return resized
+        return cv2.resize(frame_rgb, (width, height), interpolation=cv2.INTER_LINEAR)
     except Exception:
-        # fallback (slower) without cv2
         from PIL import Image
         im = Image.fromarray(frame_rgb.astype(np.uint8))
         im = im.resize((width, height))
@@ -95,6 +99,7 @@ class SoraWM:
         )
         self.cleaner_type = cleaner_type
         self.detect_batch_size = detect_batch_size
+        self.device = device
 
     def run(
         self,
@@ -113,14 +118,27 @@ class SoraWM:
 
         temp_output_path = output_video_path.parent / f"temp_{output_video_path.name}"
 
-        output_options = {
-            "pix_fmt": "yuv420p",
-            "vcodec": "libx264",
-            "preset": "fast",      # speed
-            "crf": "16",           # quality
-            "movflags": "+faststart",
-           }
-
+        # ✅ Best speed + high quality:
+        # - If CUDA + NVENC is available => use h264_nvenc (much faster)
+        # - Else use libx264
+        if self.device == "cuda" and _has_nvenc():
+            output_options = {
+                "pix_fmt": "yuv420p",
+                "vcodec": "h264_nvenc",
+                "preset": "p4",        # good speed/quality
+                "rc": "vbr",
+                "cq": "18",            # lower = higher quality (17~20 sweet spot)
+                "b:v": "0",
+                "movflags": "+faststart",
+            }
+        else:
+            output_options = {
+                "pix_fmt": "yuv420p",
+                "vcodec": "libx264",
+                "preset": "medium",    # better quality than fast (still good speed)
+                "crf": "17",           # near visually lossless
+                "movflags": "+faststart",
+            }
 
         process_out = (
             ffmpeg.input(
@@ -136,9 +154,7 @@ class SoraWM:
             .run_async(pipe_stdin=True)
         )
 
-        # -------------------------
-        # 1) Detect watermarks (batch)
-        # -------------------------
+        # 1) Detect watermarks
         frame_bboxes = {}
         detect_missed = []
         bbox_centers = []
@@ -172,8 +188,7 @@ class SoraWM:
                         bboxes.append(None)
 
                     if progress_callback and batch_idx % 10 == 0:
-                        progress = 10 + int((batch_idx / total_frames) * 40)
-                        progress_callback(progress)
+                        progress_callback(10 + int((batch_idx / total_frames) * 40))
 
                 batch_frames.clear()
                 batch_indices.clear()
@@ -193,15 +208,9 @@ class SoraWM:
                     bboxes.append(None)
 
                 if progress_callback and batch_idx % 10 == 0:
-                    progress = 10 + int((batch_idx / total_frames) * 40)
-                    progress_callback(progress)
+                    progress_callback(10 + int((batch_idx / total_frames) * 40))
 
-        if not quiet:
-            logger.debug(f"detect missed frames: {detect_missed}")
-
-        # -------------------------
         # 2) Fill missed bboxes
-        # -------------------------
         bkps_full = [0, total_frames]
         if detect_missed:
             bkps = find_2d_data_bkps(bbox_centers)
@@ -222,9 +231,7 @@ class SoraWM:
                     elif after_box:
                         frame_bboxes[missed_idx]["bbox"] = after_box
 
-        # -------------------------
         # 3) Clean watermark
-        # -------------------------
         if self.cleaner_type == CleanerType.LAMA:
             input_video_loader = VideoLoader(input_video_path)
             for idx, frame in enumerate(
@@ -240,8 +247,7 @@ class SoraWM:
                 process_out.stdin.write(cleaned_frame.tobytes())
 
                 if progress_callback and idx % 10 == 0:
-                    progress = 50 + int((idx / total_frames) * 45)
-                    progress_callback(progress)
+                    progress_callback(50 + int((idx / total_frames) * 45))
 
         elif self.cleaner_type == CleanerType.E2FGVI_HQ:
             input_video_loader = VideoLoader(input_video_path)
@@ -273,8 +279,7 @@ class SoraWM:
                 for i in range(start, end):
                     bbox = frame_bboxes[i]["bbox"]
                     if bbox is not None:
-                        i_off = i - start
-                        masks[i_off] = _make_mask_from_bbox(height, width, bbox)
+                        masks[i - start] = _make_mask_from_bbox(height, width, bbox)
 
                 cleaned_frames = self.cleaner.clean(frames, masks)
 
@@ -289,13 +294,12 @@ class SoraWM:
                 for write_idx in range(seg_start, seg_end):
                     if write_idx < len(all_cleaned_frames) and all_cleaned_frames[write_idx] is not None:
                         cleaned_frame = all_cleaned_frames[write_idx]
-                        cleaned_frame_bgr = cleaned_frame[:, :, ::-1]  # RGB -> BGR
+                        cleaned_frame_bgr = cleaned_frame[:, :, ::-1]
                         process_out.stdin.write(cleaned_frame_bgr.astype(np.uint8).tobytes())
                         frame_counter += 1
 
                         if progress_callback and frame_counter % 10 == 0:
-                            progress = 50 + int((frame_counter / total_frames) * 45)
-                            progress_callback(progress)
+                            progress_callback(50 + int((frame_counter / total_frames) * 45))
 
         elif self.cleaner_type == CleanerType.PROPAINTER:
             import tempfile
@@ -315,23 +319,18 @@ class SoraWM:
                 tmp_path = Path(td)
                 cleaned_frames_rgb = self.cleaner.clean(frames_rgb, masks, tmp_path, fps=fps)
 
-            # ✅ IMPORTANT FIX: ProPainter may output smaller frames (e.g. 240x436),
-            # so we resize back to original (width,height) before piping to ffmpeg.
             for idx, fr in enumerate(cleaned_frames_rgb):
                 fr = _resize_frame_rgb(fr, width=width, height=height)
                 cleaned_bgr = fr[:, :, ::-1].astype(np.uint8)
                 process_out.stdin.write(cleaned_bgr.tobytes())
 
                 if progress_callback and idx % 10 == 0:
-                    progress = 50 + int((idx / total_frames) * 45)
-                    progress_callback(progress)
+                    progress_callback(50 + int((idx / total_frames) * 45))
 
         else:
             raise ValueError(f"Unsupported cleaner type in run(): {self.cleaner_type}")
 
-        # -------------------------
         # 4) Finalize + merge audio
-        # -------------------------
         process_out.stdin.close()
         process_out.wait()
 
@@ -345,19 +344,23 @@ class SoraWM:
 
     def merge_audio_track(self, input_video_path: Path, temp_output_path: Path, output_video_path: Path):
         logger.info("Merging audio track...")
+
         video_stream = ffmpeg.input(str(temp_output_path))
         audio_stream = ffmpeg.input(str(input_video_path)).audio
 
         (
             ffmpeg.output(
-                video_stream,
+                video_stream.video,
                 audio_stream,
                 str(output_video_path),
-                vcodec="copy",
+                vcodec="copy",   # ✅ keep already encoded video (no extra loss)
                 acodec="aac",
+                audio_bitrate="192k",
+                movflags="+faststart",
             )
             .overwrite_output()
             .run(quiet=True)
         )
+
         temp_output_path.unlink(missing_ok=True)
         logger.info(f"Saved no watermark video with audio at: {output_video_path}")

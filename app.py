@@ -1,6 +1,8 @@
 import tempfile
 from pathlib import Path
 import traceback
+import subprocess
+import hashlib
 
 import streamlit as st
 
@@ -17,10 +19,30 @@ def _pick_device() -> str:
         return "cpu"
 
 
+def _make_browser_preview_mp4(input_path: Path, out_path: Path):
+    """
+    Make a browser-safe MP4 preview (H.264 + AAC).
+    Fast encode intended ONLY for preview.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(input_path),
+        "-vf", "scale='min(1280,iw)':-2",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def main():
     st.set_page_config(page_title="Sora Watermark Cleaner", page_icon="🎬", layout="centered")
 
-    # Header
     st.markdown(
         """
         <div style='text-align: center; padding: 1rem 0;'>
@@ -33,13 +55,11 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Footer info
     st.markdown(
         """
         <div style='text-align: center; padding: 1rem 0; margin-top: 0.5rem;'>
             <p style='color: #888; font-size: 0.9rem;'>
                 Built with ❤️ by Chetan using Streamlit and AI
-                </a>
             </p>
         </div>
         """,
@@ -99,7 +119,7 @@ def main():
     # ---------------------------
     propainter_dir = None
     propainter_weights_dir = None
-    propainter_fast_mode = True  # default ON
+    propainter_fast_mode = True
 
     if hasattr(CleanerType, "PROPAINTER") and model_type == CleanerType.PROPAINTER:
         st.markdown("#### 🧠 ProPainter Setup")
@@ -139,12 +159,8 @@ def main():
 
     if needs_reload:
         with st.spinner(f"Loading {model_type.value.upper()} model..."):
-            sora_kwargs = {
-                "cleaner_type": model_type,
-                "device": device,
-            }
+            sora_kwargs = {"cleaner_type": model_type, "device": device}
 
-            # Only pass ProPainter args if ProPainter selected
             if hasattr(CleanerType, "PROPAINTER") and model_type == CleanerType.PROPAINTER:
                 sora_kwargs.update(
                     {
@@ -161,14 +177,7 @@ def main():
 
     st.markdown("---")
 
-    # ---------------------------
-    # Mode selection
-    # ---------------------------
-    mode = st.radio(
-        "Select input mode:",
-        ["📁 Upload Video File", "🗂️ Process Folder"],
-        horizontal=True,
-    )
+    mode = st.radio("Select input mode:", ["📁 Upload Video File", "🗂️ Process Folder"], horizontal=True)
 
     # ===========================
     # SINGLE VIDEO MODE
@@ -178,32 +187,56 @@ def main():
             "Upload your video",
             type=["mp4", "avi", "mov", "mkv"],
             accept_multiple_files=False,
+            key="single_uploader",
         )
 
         if uploaded_file:
+            video_bytes = uploaded_file.getvalue()
+
             # reset if new file
-            if (
-                "current_file_name" not in st.session_state
-                or st.session_state.current_file_name != uploaded_file.name
-            ):
+            if st.session_state.get("current_file_name") != uploaded_file.name:
                 st.session_state.current_file_name = uploaded_file.name
+                st.session_state.input_video_bytes = video_bytes
                 st.session_state.pop("processed_video_data", None)
                 st.session_state.pop("processed_video_name", None)
+                st.session_state.pop("preview_video_bytes", None)
+                st.session_state.pop("preview_sig", None)
 
             st.success(f"✅ Uploaded: {uploaded_file.name}")
+
+            # ✅ build a stable signature so we don't re-encode preview every rerun
+            sig = hashlib.md5(st.session_state.input_video_bytes).hexdigest()
+
+            if st.session_state.get("preview_sig") != sig:
+                with st.spinner("Preparing preview (browser-compatible)..."):
+                    with tempfile.TemporaryDirectory() as td:
+                        tmp = Path(td)
+                        src = tmp / uploaded_file.name
+                        src.write_bytes(st.session_state.input_video_bytes)
+
+                        preview_path = tmp / "preview.mp4"
+
+                        try:
+                            _make_browser_preview_mp4(src, preview_path)
+                            st.session_state.preview_video_bytes = preview_path.read_bytes()
+                            st.session_state.preview_sig = sig
+                        except Exception:
+                            # fallback: try original bytes
+                            st.session_state.preview_video_bytes = st.session_state.input_video_bytes
+                            st.session_state.preview_sig = sig
 
             col_left, col_right = st.columns(2)
 
             with col_left:
                 st.markdown("### 📥 Original Video")
-                st.video(uploaded_file)
+                st.video(st.session_state.preview_video_bytes, format="video/mp4")
 
             with col_right:
                 st.markdown("### 🎬 Processed Video")
                 if "processed_video_data" not in st.session_state:
                     st.info("Click 'Remove Watermark' to process the video")
                 else:
-                    st.video(st.session_state.processed_video_data)
+                    st.video(st.session_state.processed_video_data, format="video/mp4")
 
             if st.button("🚀 Remove Watermark", type="primary", use_container_width=True):
                 with tempfile.TemporaryDirectory() as tmp_dir:
@@ -224,19 +257,13 @@ def main():
                                 status_text.text(f"🎵 Merging audio... {progress}%")
 
                         input_path = tmp_path / uploaded_file.name
-                        with open(input_path, "wb") as f:
-                            f.write(uploaded_file.read())
+                        input_path.write_bytes(st.session_state.input_video_bytes)
 
                         output_path = tmp_path / f"cleaned_{uploaded_file.name}"
 
-                        st.session_state.sora_wm.run(
-                            input_path, output_path, progress_callback=update_progress
-                        )
+                        st.session_state.sora_wm.run(input_path, output_path, progress_callback=update_progress)
 
-                        with open(output_path, "rb") as f:
-                            video_data = f.read()
-
-                        st.session_state.processed_video_data = video_data
+                        st.session_state.processed_video_data = output_path.read_bytes()
                         st.session_state.processed_video_name = f"cleaned_{uploaded_file.name}"
 
                         st.success("✅ Watermark removed successfully!")
@@ -281,11 +308,8 @@ def main():
                     output_folder.mkdir(exist_ok=True)
 
                     try:
-                        # Save uploaded files
                         for up in uploaded_files:
-                            file_path = input_folder / up.name
-                            with open(file_path, "wb") as f:
-                                f.write(up.read())
+                            (input_folder / up.name).write_bytes(up.getvalue())
 
                         st.session_state.batch_processed_files = []
                         progress_bar = st.progress(0)
@@ -294,7 +318,6 @@ def main():
                         processed_count = 0
 
                         def update_progress(progress: int):
-                            # progress is per-video [0..100], convert to overall
                             p = max(0, min(100, int(progress)))
                             overall = (processed_count + (p / 100.0)) / float(video_count)
                             progress_bar.progress(min(1.0, max(0.0, overall)))
@@ -319,18 +342,13 @@ def main():
                                 continue
 
                             output_path = output_folder / f"cleaned_{video_file.name}"
-
-                            st.session_state.sora_wm.run(
-                                video_file, output_path, progress_callback=update_progress
-                            )
+                            st.session_state.sora_wm.run(video_file, output_path, progress_callback=update_progress)
 
                             processed_count += 1
 
-                            # save to session for download
-                            with open(output_path, "rb") as f:
-                                st.session_state.batch_processed_files.append(
-                                    {"name": output_path.name, "data": f.read()}
-                                )
+                            st.session_state.batch_processed_files.append(
+                                {"name": output_path.name, "data": output_path.read_bytes()}
+                            )
 
                         progress_bar.progress(1.0)
                         current_file_text.text("✅ All videos processed!")
@@ -341,7 +359,6 @@ def main():
                         st.error(f"❌ Error processing videos: {str(e)}")
                         st.code(traceback.format_exc())
 
-            # Download buttons (after rerun)
             if "batch_processed_files" in st.session_state and st.session_state.batch_processed_files:
                 st.markdown("---")
                 st.markdown("### ⬇️ Download Processed Videos")
