@@ -3,6 +3,7 @@ from pathlib import Path
 import traceback
 import subprocess
 import hashlib
+import os
 
 import streamlit as st
 
@@ -124,15 +125,16 @@ def main():
     if hasattr(CleanerType, "PROPAINTER") and model_type == CleanerType.PROPAINTER:
         st.markdown("#### 🧠 ProPainter Setup")
 
+        # IMPORTANT: default to RunPod/Linux path, not Windows
         propainter_dir = st.text_input(
             "ProPainter Repo Path",
-            value=r"C:\Users\WIN11\Desktop\ProPainter",
-            help="Path where you cloned https://github.com/sczhou/ProPainter",
+            value="/workspace/ProPainter",
+            help="RunPod/Linux example: /workspace/ProPainter (not a Windows path).",
         )
 
         propainter_weights_dir = st.text_input(
             "Weights Dir (optional)",
-            value=r"",
+            value="",
             help="Optional. If empty, ProPainter usually uses its own ./weights folder.",
         )
 
@@ -146,34 +148,83 @@ def main():
             propainter_weights_dir = None
 
     # ---------------------------
-    # Initialize SoraWM (SAFE)
+    # Lazy init engine (NEVER blocks UI)
     # ---------------------------
     device = _pick_device()
     st.caption(f"🖥️ Device: **{device.upper()}**")
 
-    settings_key = (model_type, propainter_dir, propainter_weights_dir, propainter_fast_mode, device)
+    def build_sora_kwargs():
+        sora_kwargs = {"cleaner_type": model_type, "device": device}
 
-    needs_reload = ("sora_wm" not in st.session_state) or (
-        st.session_state.get("settings_key") != settings_key
-    )
+        if hasattr(CleanerType, "PROPAINTER") and model_type == CleanerType.PROPAINTER:
+            sora_kwargs.update(
+                {
+                    "propainter_dir": propainter_dir,
+                    "propainter_weights_dir": propainter_weights_dir,
+                    "propainter_fast_mode": propainter_fast_mode,
+                }
+            )
+        return sora_kwargs
 
-    if needs_reload:
+    def get_engine_safe(sora_kwargs):
+        try:
+            return SoraWM(**sora_kwargs), None
+        except FileNotFoundError as e:
+            return None, str(e)
+        except Exception as e:
+            return None, f"{type(e).__name__}: {e}"
+
+    def ensure_engine():
+        sora_kwargs = build_sora_kwargs()
+
+        # Block Windows path in RunPod/Linux
+        if hasattr(CleanerType, "PROPAINTER") and model_type == CleanerType.PROPAINTER:
+            prop_dir = (propainter_dir or "").strip()
+            if ":" in prop_dir and "\\" in prop_dir:
+                return None, "❌ You pasted a Windows path. On RunPod/Linux use: /workspace/ProPainter"
+
+            # quick helpful checks
+            if prop_dir and not Path(prop_dir).exists():
+                return None, f"❌ ProPainter repo path not found: {prop_dir}\n\nDid you clone it in RunPod? Try: `git clone https://github.com/sczhou/ProPainter.git /workspace/ProPainter`"
+
+            if prop_dir and not Path(prop_dir, "inference_propainter.py").exists():
+                return None, f"❌ inference_propainter.py not found inside: {prop_dir}\n\nMake sure `propainter_dir` points to the ProPainter repo ROOT."
+
+        settings_key = (
+            model_type,
+            propainter_dir,
+            propainter_weights_dir,
+            propainter_fast_mode,
+            device,
+        )
+
+        if (
+            "sora_wm" in st.session_state
+            and st.session_state.get("settings_key") == settings_key
+            and st.session_state.get("sora_wm") is not None
+        ):
+            return st.session_state.sora_wm, None
+
         with st.spinner(f"Loading {model_type.value.upper()} model..."):
-            sora_kwargs = {"cleaner_type": model_type, "device": device}
+            engine, err = get_engine_safe(sora_kwargs)
 
-            if hasattr(CleanerType, "PROPAINTER") and model_type == CleanerType.PROPAINTER:
-                sora_kwargs.update(
-                    {
-                        "propainter_dir": propainter_dir,
-                        "propainter_weights_dir": propainter_weights_dir,
-                        "propainter_fast_mode": propainter_fast_mode,
-                    }
-                )
+        st.session_state.settings_key = settings_key
+        st.session_state.sora_wm = engine
 
-            st.session_state.sora_wm = SoraWM(**sora_kwargs)
-            st.session_state.settings_key = settings_key
+        return engine, err
 
-        st.success(f"✅ {model_type.value.upper()} model loaded!")
+    # Optional manual load button (nice for testing)
+    colA, colB = st.columns([1, 2])
+    with colA:
+        if st.button("🔄 Load / Reload Model", use_container_width=True):
+            engine, err = ensure_engine()
+            if err:
+                st.error(err)
+            else:
+                st.success(f"✅ {model_type.value.upper()} model loaded!")
+    with colB:
+        if hasattr(CleanerType, "PROPAINTER") and model_type == CleanerType.PROPAINTER:
+            st.caption("RunPod path should be like **/workspace/ProPainter**")
 
     st.markdown("---")
 
@@ -204,7 +255,7 @@ def main():
 
             st.success(f"✅ Uploaded: {uploaded_file.name}")
 
-            # ✅ build a stable signature so we don't re-encode preview every rerun
+            # stable signature so we don't re-encode preview every rerun
             sig = hashlib.md5(st.session_state.input_video_bytes).hexdigest()
 
             if st.session_state.get("preview_sig") != sig:
@@ -221,7 +272,6 @@ def main():
                             st.session_state.preview_video_bytes = preview_path.read_bytes()
                             st.session_state.preview_sig = sig
                         except Exception:
-                            # fallback: try original bytes
                             st.session_state.preview_video_bytes = st.session_state.input_video_bytes
                             st.session_state.preview_sig = sig
 
@@ -243,6 +293,12 @@ def main():
                     tmp_path = Path(tmp_dir)
 
                     try:
+                        # ✅ lazy load engine here (never blocks uploader)
+                        engine, err = ensure_engine()
+                        if err:
+                            st.error(err)
+                            st.stop()
+
                         progress_bar = st.progress(0)
                         status_text = st.empty()
 
@@ -261,7 +317,7 @@ def main():
 
                         output_path = tmp_path / f"cleaned_{uploaded_file.name}"
 
-                        st.session_state.sora_wm.run(input_path, output_path, progress_callback=update_progress)
+                        engine.run(input_path, output_path, progress_callback=update_progress)
 
                         st.session_state.processed_video_data = output_path.read_bytes()
                         st.session_state.processed_video_name = f"cleaned_{uploaded_file.name}"
@@ -272,6 +328,14 @@ def main():
                     except Exception as e:
                         st.error(f"❌ Error processing video: {str(e)}")
                         st.code(traceback.format_exc())
+
+                        # Helpful hint for broken pipe
+                        if "Broken pipe" in str(e) or "Errno 32" in str(e):
+                            st.warning(
+                                "Broken pipe usually means FFmpeg output encoder crashed.\n"
+                                "You MUST patch `sorawm/core.py` to capture ffmpeg stderr.\n"
+                                "I gave you the exact patch below."
+                            )
 
             if "processed_video_data" in st.session_state:
                 st.download_button(
@@ -308,6 +372,12 @@ def main():
                     output_folder.mkdir(exist_ok=True)
 
                     try:
+                        # ✅ lazy load engine here too
+                        engine, err = ensure_engine()
+                        if err:
+                            st.error(err)
+                            st.stop()
+
                         for up in uploaded_files:
                             (input_folder / up.name).write_bytes(up.getvalue())
 
@@ -342,10 +412,9 @@ def main():
                                 continue
 
                             output_path = output_folder / f"cleaned_{video_file.name}"
-                            st.session_state.sora_wm.run(video_file, output_path, progress_callback=update_progress)
+                            engine.run(video_file, output_path, progress_callback=update_progress)
 
                             processed_count += 1
-
                             st.session_state.batch_processed_files.append(
                                 {"name": output_path.name, "data": output_path.read_bytes()}
                             )
@@ -358,6 +427,12 @@ def main():
                     except Exception as e:
                         st.error(f"❌ Error processing videos: {str(e)}")
                         st.code(traceback.format_exc())
+
+                        if "Broken pipe" in str(e) or "Errno 32" in str(e):
+                            st.warning(
+                                "Broken pipe usually means FFmpeg output encoder crashed.\n"
+                                "Patch `sorawm/core.py` to capture ffmpeg stderr (patch below)."
+                            )
 
             if "batch_processed_files" in st.session_state and st.session_state.batch_processed_files:
                 st.markdown("---")

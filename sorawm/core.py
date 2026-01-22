@@ -33,7 +33,11 @@ def _has_nvenc() -> bool:
     if _NVENC_AVAILABLE is not None:
         return _NVENC_AVAILABLE
     try:
-        out = subprocess.check_output(["ffmpeg", "-hide_banner", "-encoders"], stderr=subprocess.STDOUT, text=True)
+        out = subprocess.check_output(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
         _NVENC_AVAILABLE = ("h264_nvenc" in out)
     except Exception:
         _NVENC_AVAILABLE = False
@@ -73,6 +77,38 @@ def _resize_frame_rgb(frame_rgb: np.ndarray, width: int, height: int) -> np.ndar
         im = Image.fromarray(frame_rgb.astype(np.uint8))
         im = im.resize((width, height))
         return np.array(im)
+
+
+def _read_stderr_tail(proc, tail_chars: int = 6000) -> str:
+    """Read last part of ffmpeg stderr (if piped)."""
+    try:
+        if getattr(proc, "stderr", None):
+            data = proc.stderr.read()
+            if isinstance(data, bytes):
+                text = data.decode("utf-8", errors="ignore")
+            else:
+                text = str(data)
+            return text[-tail_chars:]
+    except Exception:
+        pass
+    return ""
+
+
+def _raise_ffmpeg_dead(proc, context: str):
+    err = _read_stderr_tail(proc)
+    raise RuntimeError(
+        f"FFmpeg died while encoding output (Broken pipe) during: {context}\n"
+        "This usually happens because FFmpeg received frames with wrong size / pix_fmt / fps.\n\n"
+        f"Last FFmpeg error:\n{err}"
+    )
+
+
+def _safe_ffmpeg_write(proc, frame_bytes: bytes, context: str):
+    """Write to ffmpeg stdin safely and raise a helpful error if ffmpeg died."""
+    try:
+        proc.stdin.write(frame_bytes)
+    except BrokenPipeError:
+        _raise_ffmpeg_dead(proc, context)
 
 
 class SoraWM:
@@ -125,9 +161,9 @@ class SoraWM:
             output_options = {
                 "pix_fmt": "yuv420p",
                 "vcodec": "h264_nvenc",
-                "preset": "p4",        # good speed/quality
+                "preset": "p4",
                 "rc": "vbr",
-                "cq": "18",            # lower = higher quality (17~20 sweet spot)
+                "cq": "18",
                 "b:v": "0",
                 "movflags": "+faststart",
             }
@@ -135,11 +171,12 @@ class SoraWM:
             output_options = {
                 "pix_fmt": "yuv420p",
                 "vcodec": "libx264",
-                "preset": "medium",    # better quality than fast (still good speed)
-                "crf": "17",           # near visually lossless
+                "preset": "medium",
+                "crf": "17",
                 "movflags": "+faststart",
             }
 
+        # IMPORTANT: pipe_stderr=True so we can show real ffmpeg error if it dies
         process_out = (
             ffmpeg.input(
                 "pipe:",
@@ -150,31 +187,52 @@ class SoraWM:
             )
             .output(str(temp_output_path), **output_options)
             .overwrite_output()
-            .global_args("-loglevel", "error")
-            .run_async(pipe_stdin=True)
+            .global_args("-hide_banner", "-loglevel", "error")
+            .run_async(pipe_stdin=True, pipe_stderr=True)
         )
 
-        # 1) Detect watermarks
-        frame_bboxes = {}
-        detect_missed = []
-        bbox_centers = []
-        bboxes = []
+        try:
+            # 1) Detect watermarks
+            frame_bboxes = {}
+            detect_missed = []
+            bbox_centers = []
+            bboxes = []
 
-        if not quiet:
-            logger.debug(f"total frames: {total_frames}, fps: {fps}, width: {width}, height: {height}")
+            if not quiet:
+                logger.debug(f"total frames: {total_frames}, fps: {fps}, width: {width}, height: {height}")
 
-        batch_frames = []
-        batch_indices = []
+            batch_frames = []
+            batch_indices = []
 
-        for idx, frame in enumerate(
-            tqdm(input_video_loader, total=total_frames, desc="Detect watermarks", disable=quiet)
-        ):
-            batch_frames.append(frame)
-            batch_indices.append(idx)
+            for idx, frame in enumerate(
+                tqdm(input_video_loader, total=total_frames, desc="Detect watermarks", disable=quiet)
+            ):
+                batch_frames.append(frame)
+                batch_indices.append(idx)
 
-            if len(batch_frames) >= self.detect_batch_size:
+                if len(batch_frames) >= self.detect_batch_size:
+                    batch_results = self.detector.detect_batch(batch_frames, batch_size=self.detect_batch_size)
+
+                    for batch_idx, detection_result in zip(batch_indices, batch_results):
+                        if detection_result["detected"]:
+                            frame_bboxes[batch_idx] = {"bbox": detection_result["bbox"]}
+                            x1, y1, x2, y2 = detection_result["bbox"]
+                            bbox_centers.append((int((x1 + x2) / 2), int((y1 + y2) / 2)))
+                            bboxes.append((x1, y1, x2, y2))
+                        else:
+                            frame_bboxes[batch_idx] = {"bbox": None}
+                            detect_missed.append(batch_idx)
+                            bbox_centers.append(None)
+                            bboxes.append(None)
+
+                        if progress_callback and batch_idx % 10 == 0:
+                            progress_callback(10 + int((batch_idx / total_frames) * 40))
+
+                    batch_frames.clear()
+                    batch_indices.clear()
+
+            if batch_frames:
                 batch_results = self.detector.detect_batch(batch_frames, batch_size=self.detect_batch_size)
-
                 for batch_idx, detection_result in zip(batch_indices, batch_results):
                     if detection_result["detected"]:
                         frame_bboxes[batch_idx] = {"bbox": detection_result["bbox"]}
@@ -190,149 +248,153 @@ class SoraWM:
                     if progress_callback and batch_idx % 10 == 0:
                         progress_callback(10 + int((batch_idx / total_frames) * 40))
 
-                batch_frames.clear()
-                batch_indices.clear()
+            # 2) Fill missed bboxes
+            bkps_full = [0, total_frames]
+            if detect_missed:
+                bkps = find_2d_data_bkps(bbox_centers)
+                bkps_full = [0] + bkps + [total_frames]
+                interval_bboxes = get_interval_average_bbox(bboxes, bkps_full)
+                missed_intervals = find_idxs_interval(detect_missed, bkps_full)
 
-        if batch_frames:
-            batch_results = self.detector.detect_batch(batch_frames, batch_size=self.detect_batch_size)
-            for batch_idx, detection_result in zip(batch_indices, batch_results):
-                if detection_result["detected"]:
-                    frame_bboxes[batch_idx] = {"bbox": detection_result["bbox"]}
-                    x1, y1, x2, y2 = detection_result["bbox"]
-                    bbox_centers.append((int((x1 + x2) / 2), int((y1 + y2) / 2)))
-                    bboxes.append((x1, y1, x2, y2))
-                else:
-                    frame_bboxes[batch_idx] = {"bbox": None}
-                    detect_missed.append(batch_idx)
-                    bbox_centers.append(None)
-                    bboxes.append(None)
+                for missed_idx, interval_idx in zip(detect_missed, missed_intervals):
+                    if interval_idx < len(interval_bboxes) and interval_bboxes[interval_idx] is not None:
+                        frame_bboxes[missed_idx]["bbox"] = interval_bboxes[interval_idx]
+                    else:
+                        before = max(missed_idx - 1, 0)
+                        after = min(missed_idx + 1, total_frames - 1)
+                        before_box = frame_bboxes[before]["bbox"]
+                        after_box = frame_bboxes[after]["bbox"]
+                        if before_box:
+                            frame_bboxes[missed_idx]["bbox"] = before_box
+                        elif after_box:
+                            frame_bboxes[missed_idx]["bbox"] = after_box
 
-                if progress_callback and batch_idx % 10 == 0:
-                    progress_callback(10 + int((batch_idx / total_frames) * 40))
-
-        # 2) Fill missed bboxes
-        bkps_full = [0, total_frames]
-        if detect_missed:
-            bkps = find_2d_data_bkps(bbox_centers)
-            bkps_full = [0] + bkps + [total_frames]
-            interval_bboxes = get_interval_average_bbox(bboxes, bkps_full)
-            missed_intervals = find_idxs_interval(detect_missed, bkps_full)
-
-            for missed_idx, interval_idx in zip(detect_missed, missed_intervals):
-                if interval_idx < len(interval_bboxes) and interval_bboxes[interval_idx] is not None:
-                    frame_bboxes[missed_idx]["bbox"] = interval_bboxes[interval_idx]
-                else:
-                    before = max(missed_idx - 1, 0)
-                    after = min(missed_idx + 1, total_frames - 1)
-                    before_box = frame_bboxes[before]["bbox"]
-                    after_box = frame_bboxes[after]["bbox"]
-                    if before_box:
-                        frame_bboxes[missed_idx]["bbox"] = before_box
-                    elif after_box:
-                        frame_bboxes[missed_idx]["bbox"] = after_box
-
-        # 3) Clean watermark
-        if self.cleaner_type == CleanerType.LAMA:
-            input_video_loader = VideoLoader(input_video_path)
-            for idx, frame in enumerate(
-                tqdm(input_video_loader, total=total_frames, desc="Remove watermarks", disable=quiet)
-            ):
-                bbox = frame_bboxes[idx]["bbox"]
-                if bbox is not None:
-                    mask = _make_mask_from_bbox(height, width, bbox)
-                    cleaned_frame = self.cleaner.clean(frame, mask)
-                else:
-                    cleaned_frame = frame
-
-                process_out.stdin.write(cleaned_frame.tobytes())
-
-                if progress_callback and idx % 10 == 0:
-                    progress_callback(50 + int((idx / total_frames) * 45))
-
-        elif self.cleaner_type == CleanerType.E2FGVI_HQ:
-            input_video_loader = VideoLoader(input_video_path)
-            frame_counter = 0
-            overlap_ratio = self.cleaner.config.overlap_ratio
-            all_cleaned_frames = None
-
-            bkps_full = refine_bkps_by_chunk_size(bkps_full, self.cleaner.chunk_size)
-            num_segments = len(bkps_full) - 1
-
-            for segment_idx in tqdm(range(num_segments), desc="Segment", position=0, leave=True, disable=quiet):
-                seg_start = bkps_full[segment_idx]
-                seg_end = bkps_full[segment_idx + 1]
-                seg_length = seg_end - seg_start
-
-                segment_overlap = max(1, int(overlap_ratio * seg_length))
-                start = seg_start
-                end = seg_end
-
-                if segment_idx > 0:
-                    start = max(seg_start - segment_overlap, bkps_full[segment_idx - 1])
-                if segment_idx < num_segments - 1:
-                    end = min(seg_end + segment_overlap, bkps_full[segment_idx + 2])
-
-                frames = np.array(input_video_loader.get_slice(start, end))
-                frames = frames[:, :, :, ::-1].copy()  # BGR -> RGB
-
-                masks = np.zeros((len(frames), height, width), dtype=np.uint8)
-                for i in range(start, end):
-                    bbox = frame_bboxes[i]["bbox"]
+            # 3) Clean watermark
+            if self.cleaner_type == CleanerType.LAMA:
+                input_video_loader = VideoLoader(input_video_path)
+                for idx, frame in enumerate(
+                    tqdm(input_video_loader, total=total_frames, desc="Remove watermarks", disable=quiet)
+                ):
+                    bbox = frame_bboxes[idx]["bbox"]
                     if bbox is not None:
-                        masks[i - start] = _make_mask_from_bbox(height, width, bbox)
+                        mask = _make_mask_from_bbox(height, width, bbox)
+                        cleaned_frame = self.cleaner.clean(frame, mask)
+                    else:
+                        cleaned_frame = frame
 
-                cleaned_frames = self.cleaner.clean(frames, masks)
+                    _safe_ffmpeg_write(process_out, cleaned_frame.tobytes(), context="LAMA write frame")
 
-                all_cleaned_frames = merge_frames_with_overlap(
-                    result_frames=all_cleaned_frames,
-                    chunk_frames=cleaned_frames,
-                    start_idx=start,
-                    overlap_size=segment_overlap,
-                    is_first_chunk=(segment_idx == 0),
-                )
+                    if progress_callback and idx % 10 == 0:
+                        progress_callback(50 + int((idx / total_frames) * 45))
 
-                for write_idx in range(seg_start, seg_end):
-                    if write_idx < len(all_cleaned_frames) and all_cleaned_frames[write_idx] is not None:
-                        cleaned_frame = all_cleaned_frames[write_idx]
-                        cleaned_frame_bgr = cleaned_frame[:, :, ::-1]
-                        process_out.stdin.write(cleaned_frame_bgr.astype(np.uint8).tobytes())
-                        frame_counter += 1
+            elif self.cleaner_type == CleanerType.E2FGVI_HQ:
+                input_video_loader = VideoLoader(input_video_path)
+                frame_counter = 0
+                overlap_ratio = self.cleaner.config.overlap_ratio
+                all_cleaned_frames = None
 
-                        if progress_callback and frame_counter % 10 == 0:
-                            progress_callback(50 + int((frame_counter / total_frames) * 45))
+                bkps_full = refine_bkps_by_chunk_size(bkps_full, self.cleaner.chunk_size)
+                num_segments = len(bkps_full) - 1
 
-        elif self.cleaner_type == CleanerType.PROPAINTER:
-            import tempfile
+                for segment_idx in tqdm(range(num_segments), desc="Segment", position=0, leave=True, disable=quiet):
+                    seg_start = bkps_full[segment_idx]
+                    seg_end = bkps_full[segment_idx + 1]
+                    seg_length = seg_end - seg_start
 
-            input_video_loader = VideoLoader(input_video_path)
+                    segment_overlap = max(1, int(overlap_ratio * seg_length))
+                    start = seg_start
+                    end = seg_end
 
-            frames_bgr = np.array(list(input_video_loader))
-            frames_rgb = frames_bgr[:, :, :, ::-1].copy()
+                    if segment_idx > 0:
+                        start = max(seg_start - segment_overlap, bkps_full[segment_idx - 1])
+                    if segment_idx < num_segments - 1:
+                        end = min(seg_end + segment_overlap, bkps_full[segment_idx + 2])
 
-            masks = np.zeros((len(frames_rgb), height, width), dtype=np.uint8)
-            for idx in range(len(frames_rgb)):
-                bbox = frame_bboxes[idx]["bbox"]
-                if bbox is not None:
-                    masks[idx] = _make_mask_from_bbox(height, width, bbox)
+                    frames = np.array(input_video_loader.get_slice(start, end))
+                    frames = frames[:, :, :, ::-1].copy()  # BGR -> RGB
 
-            with tempfile.TemporaryDirectory() as td:
-                tmp_path = Path(td)
-                cleaned_frames_rgb = self.cleaner.clean(frames_rgb, masks, tmp_path, fps=fps)
+                    masks = np.zeros((len(frames), height, width), dtype=np.uint8)
+                    for i in range(start, end):
+                        bbox = frame_bboxes[i]["bbox"]
+                        if bbox is not None:
+                            masks[i - start] = _make_mask_from_bbox(height, width, bbox)
 
-            for idx, fr in enumerate(cleaned_frames_rgb):
-                fr = _resize_frame_rgb(fr, width=width, height=height)
-                cleaned_bgr = fr[:, :, ::-1].astype(np.uint8)
-                process_out.stdin.write(cleaned_bgr.tobytes())
+                    cleaned_frames = self.cleaner.clean(frames, masks)
 
-                if progress_callback and idx % 10 == 0:
-                    progress_callback(50 + int((idx / total_frames) * 45))
+                    all_cleaned_frames = merge_frames_with_overlap(
+                        result_frames=all_cleaned_frames,
+                        chunk_frames=cleaned_frames,
+                        start_idx=start,
+                        overlap_size=segment_overlap,
+                        is_first_chunk=(segment_idx == 0),
+                    )
 
-        else:
-            raise ValueError(f"Unsupported cleaner type in run(): {self.cleaner_type}")
+                    for write_idx in range(seg_start, seg_end):
+                        if write_idx < len(all_cleaned_frames) and all_cleaned_frames[write_idx] is not None:
+                            cleaned_frame = all_cleaned_frames[write_idx]
+                            cleaned_frame_bgr = cleaned_frame[:, :, ::-1]
+                            _safe_ffmpeg_write(
+                                process_out,
+                                cleaned_frame_bgr.astype(np.uint8).tobytes(),
+                                context="E2FGVI_HQ write frame",
+                            )
+                            frame_counter += 1
 
-        # 4) Finalize + merge audio
-        process_out.stdin.close()
-        process_out.wait()
+                            if progress_callback and frame_counter % 10 == 0:
+                                progress_callback(50 + int((frame_counter / total_frames) * 45))
+
+            elif self.cleaner_type == CleanerType.PROPAINTER:
+                import tempfile
+
+                input_video_loader = VideoLoader(input_video_path)
+
+                frames_bgr = np.array(list(input_video_loader))
+                frames_rgb = frames_bgr[:, :, :, ::-1].copy()
+
+                masks = np.zeros((len(frames_rgb), height, width), dtype=np.uint8)
+                for idx in range(len(frames_rgb)):
+                    bbox = frame_bboxes[idx]["bbox"]
+                    if bbox is not None:
+                        masks[idx] = _make_mask_from_bbox(height, width, bbox)
+
+                with tempfile.TemporaryDirectory() as td:
+                    tmp_path = Path(td)
+                    cleaned_frames_rgb = self.cleaner.clean(frames_rgb, masks, tmp_path, fps=fps)
+
+                for idx, fr in enumerate(cleaned_frames_rgb):
+                    fr = _resize_frame_rgb(fr, width=width, height=height)
+                    cleaned_bgr = fr[:, :, ::-1].astype(np.uint8)
+                    _safe_ffmpeg_write(
+                        process_out,
+                        cleaned_bgr.tobytes(),
+                        context="PROPAINTER write frame",
+                    )
+
+                    if progress_callback and idx % 10 == 0:
+                        progress_callback(50 + int((idx / total_frames) * 45))
+
+            else:
+                raise ValueError(f"Unsupported cleaner type in run(): {self.cleaner_type}")
+
+        finally:
+            # 4) Finalize ffmpeg writer safely
+            try:
+                if process_out and process_out.stdin:
+                    process_out.stdin.close()
+            except Exception:
+                pass
+
+            rc = None
+            try:
+                if process_out:
+                    rc = process_out.wait()
+            except Exception:
+                pass
+
+            # If ffmpeg failed, show stderr tail so we can fix the REAL issue
+            if rc is not None and rc != 0:
+                err = _read_stderr_tail(process_out)
+                raise RuntimeError(f"FFmpeg exited with code {rc}\n\nLast FFmpeg error:\n{err}")
 
         if progress_callback:
             progress_callback(95)
