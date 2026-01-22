@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # SoraWatermarkCleaner
 
 This project provides an elegant way to remove the sora watermark in the sora2 generated videos. 
@@ -300,3 +301,7 @@ If you use this project, please cite:
 
 - [IOPaint](https://github.com/Sanster/IOPaint) for the LAMA implementation
 - [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) for object detection
+=======
+# VideoObjectRemover
+Project to remove the object in video
+>>>>>>> eb1e45e37d65b0bfece306731e796af2a85babde

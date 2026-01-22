@@ -24,7 +24,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; padding: 1rem 0;'>
-            <h1 style='margin-bottom: 0.5rem;'>🎬 Sora Watermark Cleaner</h1>
+            <h1 style='margin-bottom: 0.5rem;'>🎬 Sora Watermark Cleaner by Chetan Narayana</h1>
             <p style='font-size: 1.2rem; color: #666; margin-bottom: 1rem;'>
                 Remove watermarks from Sora-generated videos with AI-powered precision
             </p>
@@ -38,10 +38,8 @@ def main():
         """
         <div style='text-align: center; padding: 1rem 0; margin-top: 0.5rem;'>
             <p style='color: #888; font-size: 0.9rem;'>
-                Built with ❤️ using Streamlit and AI |
-                <a href='https://github.com/linkedlist771/SoraWatermarkCleaner'
+                Built with ❤️ by Chetan using Streamlit and AI |
                    target='_blank' style='color: #667eea; text-decoration: none;'>
-                    ⭐ Star on GitHub
                 </a>
             </p>
         </div>
