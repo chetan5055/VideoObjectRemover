@@ -119,7 +119,6 @@ class ProPainterCleaner:
         out = []
         for m in masks:
             mm = self._resize_even16(m, scale)
-            # keep binary-ish
             mm = (mm > 127).astype(np.uint8) * 255
             out.append(mm)
         return np.stack(out, axis=0)
@@ -137,20 +136,14 @@ class ProPainterCleaner:
         """
         root = out_dir / video_name
         if not root.exists():
-            # fallback: maybe it saved directly into out_dir
             root = out_dir
 
-        # 1) Try mp4 outputs
         mp4s = list(root.rglob("*.mp4"))
-        # ignore obvious non-results
         mp4s = [p for p in mp4s if "mask" not in p.name.lower() and "input" not in p.name.lower()]
         if mp4s:
-            # pick newest
             mp4s.sort(key=lambda p: p.stat().st_mtime, reverse=True)
             return ("mp4", mp4s[0])
 
-        # 2) Try png sequences (common: "results", "inpainted", etc.)
-        # pick folder that has many pngs
         png_folders = {}
         for p in root.rglob("*.png"):
             png_folders[p.parent] = png_folders.get(p.parent, 0) + 1
@@ -172,7 +165,6 @@ class ProPainterCleaner:
 
         orig_h, orig_w = frames_rgb[0].shape[:2]
 
-        # Fast mode: downscale to reduce VRAM/time (8GB friendly)
         run_frames = frames_rgb
         run_masks = masks
         if self.fast_mode and self.fast_scale < 1.0:
@@ -187,19 +179,28 @@ class ProPainterCleaner:
         self._write_video_mp4(run_frames, input_mp4, fps)
         self._write_masks_png_dir(run_masks, masks_dir)
 
-        # 2) Call ProPainter
+        # 2) Call ProPainter (SAFE ARGS ADDED HERE)
         python_exe = sys.executable
+
         cmd = [
             python_exe,
             str(self.propainter_dir / "inference_propainter.py"),
             "-i", str(input_mp4),
             "-m", str(masks_dir),
             "-o", str(out_dir),
+
+            # Safe defaults to reduce VRAM + prevent OOM
+            "--fp16",
+            "--max_long_edge", "512",
+            "--neighbor_length", "4",
+            "--ref_stride", "10",
         ]
 
-        # If your ProPainter supports weight dir arg, uncomment and adjust:
-        # if self.weights_dir:
-        #     cmd += ["--ckpt", str(self.weights_dir / "ProPainter.pth")]
+        # Optional weights path support (only if your ProPainter accepts --ckpt)
+        if self.weights_dir:
+            ckpt = self.weights_dir / "ProPainter.pth"
+            if ckpt.exists():
+                cmd += ["--ckpt", str(ckpt)]
 
         subprocess.check_call(cmd, cwd=str(self.propainter_dir))
 
@@ -218,7 +219,6 @@ class ProPainterCleaner:
             raise RuntimeError("❌ ProPainter produced 0 frames.")
 
         # 4) If fast_mode, upscale back to original size
-        # Also ensure final dims match original (avoid grid / ffmpeg buffer errors)
         fixed = []
         for fr in cleaned:
             if fr.shape[0] != orig_h or fr.shape[1] != orig_w:
