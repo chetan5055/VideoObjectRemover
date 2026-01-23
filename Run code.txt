@@ -1,3 +1,49 @@
 cd C:\Users\WIN11\Desktop\SoraWatermarkCleaner
 .\.venv\Scripts\activate
 streamlit run app.py
+
+
+How to setup Runpod
+
+1) Create pod (RunPod)
+
+Use your usual GPU pod image, then open Web Terminal.
+
+2) Clone your repo
+cd /workspace
+git clone git clone https://github.com/chetan5055/VideoObjectRemover.git
+cd /workspace/VideoObjectRemover
+
+3) Install uv (if not present)
+python -m pip install -U uv
+
+4) Sync dependencies from uv.lock
+
+This is the key part:
+
+uv sync
+
+
+If your project expects a venv inside the folder, uv will create .venv/.
+
+5) Activate venv
+source .venv/bin/activate
+
+6) Run Streamlit
+mkdir -p ~/.streamlit
+cat > ~/.streamlit/config.toml << 'EOF'
+[server]
+headless = true
+address = "0.0.0.0"
+port = 8501
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
+EOF
+
+streamlit run app.py --server.address 0.0.0.0 --server.port 8501
+
+
+Now open the RunPod proxy URL for port 8501.
